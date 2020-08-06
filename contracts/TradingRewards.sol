@@ -2,21 +2,23 @@ pragma solidity ^0.5.17;
 
 import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "openzeppelin-solidity/contracts/token/ERC20/ERC20Detailed.sol";
-import "openzeppelin-solidity-2.3.0/contracts/token/ERC20/SafeERC20.sol";
+import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
+import "openzeppelin-solidity/contracts/utils/ReentrancyGuard.sol";
 
 import "./ITradingRewards.sol";
 
 
-contract TradingRewards is ITradingRewards {
+// TODO: Inherit RewardsDistributionRecipient, Pausable
+contract TradingRewards is ITradingRewards, ReentrancyGuard {
     using SafeMath for uint;
     using SafeERC20 for IERC20;
 
     /* ========== STATE VARIABLES ========== */
 
     uint _currentPeriodID;
-    mapping(uint => PeriodRecords) _periodsByID;
+    mapping(uint => Period) _periods;
 
-    struct PeriodRecords {
+    struct Period {
         uint recordedFees;
         uint totalRewards;
         uint availableRewards;
@@ -32,50 +34,57 @@ contract TradingRewards is ITradingRewards {
     /* ========== CONSTRUCTOR ========== */
 
     constructor(address owner, address rewardsToken, address rewardsDistribution) public {
-        // TODO: validation
+        require(_validateAddress(owner, false), "Invalid owner account.");
+        require(_validateAddress(rewardsToken, true), "Invalid rewards token.");
+        require(_validateAddress(rewardsDistribution, true), "Invalid rewards distribution contract.");
+
         _owner = owner;
         _rewardsToken = IERC20(rewardsToken);
         _rewardsDistribution = rewardsDistribution;
     }
 
-    // TODO: ability to change rewards distribution/token, owner
+    function _validateAddress(address addr, bool shouldBeContract) internal pure returns (bool) {
+        bool isValidAddress = addr != address(0);
+        bool isOfExpectedKind = shouldBeContract == addr.isContract();
+
+        return isValidAddress && isOfExpectedKind;
+    }
 
     /* ========== VIEWS ========== */
 
-    function reward(address account, uint periodID) external view returns (uint) {
-        return _calculateAvailableRewardForAccountInPeriod(account, periodID);
+    function rewards(address account, uint periodID) external view returns (uint) {
+        return _calculateAvailableRewardsForAccountInPeriod(account, periodID);
     }
 
-    function rewardForPeriods(address account, uint[] periodIDs) external view returns (uint totalReward) {
+    function rewardsForPeriods(address account, uint[] periodIDs) external view returns (uint totalRewards) {
         for (uint i = 0; i < periodIDs.length; i++) {
             uint periodID = periodIDs[i];
 
-            totalReward = totalReward.add(_calculateAvailableRewardForAccountInPeriod(account, periodID));
+            totalRewards = totalRewards.add(_calculateAvailableRewardsForAccountInPeriod(account, periodID));
         }
     }
 
-    function _calculateAvailableRewardForAccountInPeriod(address account, uint periodID) internal view returns (uint availableReward) {
-        PeriodRecords storage period = _periodsByID[periodID];
+    function _calculateAvailableRewardsForAccountInPeriod(address account, uint periodID) internal view returns (uint availableRewards) {
+        Period storage period = _periods[periodID];
 
         if (period.availableRewards == 0) {
             return 0;
         }
 
-        // TODO: Use precision scalar
+        // TODO: Consider precision loss
         uint accountFees = period.recordedFeesForAccount[account];
         uint participationRatio = accountFees.div(period.totalFees);
-        uint maxReward = participationRatio.mul(period.totalRewards);
+        uint maxRewards = participationRatio.mul(period.totalRewards);
 
         uint alreadyClaimed = period.claimedRewardsForAccount[account];
-        availableReward = maxReward.sub(alreadyClaimed);
+        availableRewards = maxRewards.sub(alreadyClaimed);
     }
 
     /* ========== MUTATIVE FUNCTIONS ========== */
 
-    // TODO: Protect from reentrancy.
-
+    // TODO: Implement onlyX modifier (onlyExchanger?)
     function recordExchangeFee(uint amount, address account) external {
-        PeriodRecords storage period = _periodsByID[currentPeriodID];
+        Period storage period = _periods[currentPeriodID];
 
         period.recordedFeesForAccount = period.recordedFeesForAccount[account].add(amount);
         period.recordedFees = period.recordedFees.add(amount);
@@ -83,40 +92,44 @@ contract TradingRewards is ITradingRewards {
         emit FeeRecorded(amount, account, _currentPeriodID);
     }
 
-    function claimReward(uint periodID) external updateReward(msg.sender) {
-        _claimReward(msg.sender, periodID);
+    function claimRewards(uint periodID) external nonReentrant {
+        _claimRewards(msg.sender, periodID);
     }
 
-    function claimRewardForPeriods(uint[] periodIDs) external {
+    function claimRewardsForPeriods(uint[] periodIDs) external nonReentrant {
         for (uint i = 0; i < periodIDs.length; i++) {
             uint periodID = periodIDs[i];
 
-            _claimReward(msg.sender, periodID);
+            _claimRewards(msg.sender, periodID);
         }
     }
 
-    function _claimReward(address account, uint periodID) internal {
-        require(periodID < _currentPeriodID, "Cannot claim reward on active period.");
+    function _claimRewards(address account, uint periodID) internal {
+        require(periodID < _currentPeriodID, "Cannot claim rewards on active period.");
 
-        uint amountToClaim = _calculateAvailableRewardForAccountInPeriod(account, periodID);
+        uint amountToClaim = _calculateAvailableRewardsForAccountInPeriod(account, periodID);
 
-        PeriodRecords storage period = _periodsByID[periodID];
-        period.claimedRewardsForAccount = period.claimedRewardsForAccount[account].sub(amountToClaim);
+        Period storage period = _periods[periodID];
+        period.claimedRewardsForAccount = period.claimedRewardsForAccount[account].add(amountToClaim);
         period.availableRewards = period.availableRewards.sub(amountToClaim);
 
         rewardsToken.safeTransfer(account, amountToClaim);
 
-        emit RewardClaimed(amount, account, _currentPeriodID);
+        emit RewardsClaimed(amount, account, _currentPeriodID);
+    }
+
+    // TODO: Use function from RewardsDistributionRecipient instead.
+    function setRewardsDistribution(address newRewardsDistribution) external onlyOwner {
+        require(_validateAddress(newRewardsDistribution, true), "Invalid rewards distribution contract.");
+
+        _rewardsDistribution = newRewardsDistribution;
     }
 
     /* ========== RESTRICTED FUNCTIONS ========== */
 
-    function notifyRewardAmount(uint reward) external onlyRewardsDistribution {
-        _totalRewardsBalance = _totalRewardsBalance.add(reward);
-        require(rewardsToken.balanceOf(address(this)) == _totalRewardsBalance, "Insufficient balance for proposed reward.");
-
+    function notifyRewardAmount(uint newRewards) external onlyRewardsDistribution {
         uint currentBalance = rewardsToken.balanceOf(address(this));
-        uint targetBalance = currentBalance.add(amount);
+        uint targetBalance = currentBalance.add(newRewards);
         uint requiredAmount = targetBalance.sub(currentBalance);
         if (requiredAmount > 0) {
             rewardsToken.safeTransferFrom(msg.sender, address(this), requiredAmount);
@@ -124,12 +137,12 @@ contract TradingRewards is ITradingRewards {
 
         _currentPeriodID = _currentPeriodID.add(1);
 
-        _periodsByID[currentPeriodID] = PeriodRecords({
-            totalRewards: reward,
-            availableRewards: reward
+        _periods[currentPeriodID] = Period({
+            totalRewards: newRewards,
+            availableRewards: newRewards
         });
 
-        emit NewPeriodStarted(_currentPeriodID, reward);
+        emit NewPeriodStarted(_currentPeriodID, rewards);
     }
 
     function recoverTokens(address tokenAddress, uint amount) external onlyOwner {
@@ -140,8 +153,8 @@ contract TradingRewards is ITradingRewards {
         emit TokensRecovered(tokenAddress, amount);
     }
 
-    function withdrawRewardTokensFromCurrentPeriod(uint amount) external onlyOwner {
-        PeriodRecords storage period = _periodsByID[currentPeriodID];
+    function withdrawRewardsTokensFromCurrentPeriod(uint amount) external onlyOwner {
+        Period storage period = _periods[currentPeriodID];
 
         require(period.availableRewards >= amount, "Unsufficient balance for required amount.");
 
@@ -170,7 +183,7 @@ contract TradingRewards is ITradingRewards {
     /* ========== EVENTS ========== */
 
     event FeeRecorded(uint amount, address account, uint periodID);
-    event RewardClaimed(uint amount, address account, uint periodID);
+    event RewardsClaimed(uint amount, address account, uint periodID);
     event NewPeriodStarted(uint periodID, uint rewards);
     event TokensRecovered(address tokenAddress, uint amount);
     event RewardsTokensWithdrawn(uint amount);
