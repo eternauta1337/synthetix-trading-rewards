@@ -4,12 +4,14 @@ import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "openzeppelin-solidity/contracts/token/ERC20/ERC20Detailed.sol";
 import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
 import "openzeppelin-solidity/contracts/utils/ReentrancyGuard.sol";
+import "openzeppelin-solidity/contracts/utils/Address.sol";
 
 import "./ITradingRewards.sol";
 
 
 // TODO: Inherit RewardsDistributionRecipient, Pausable
 contract TradingRewards is ITradingRewards, ReentrancyGuard {
+    using Address for address;
     using SafeMath for uint;
     using SafeERC20 for IERC20;
 
@@ -43,7 +45,7 @@ contract TradingRewards is ITradingRewards, ReentrancyGuard {
         _rewardsDistribution = rewardsDistribution;
     }
 
-    function _validateAddress(address addr, bool shouldBeContract) internal pure returns (bool) {
+    function _validateAddress(address addr, bool shouldBeContract) internal view returns (bool) {
         bool isValidAddress = addr != address(0);
         bool isOfExpectedKind = shouldBeContract == addr.isContract();
 
@@ -56,7 +58,7 @@ contract TradingRewards is ITradingRewards, ReentrancyGuard {
         return _calculateAvailableRewardsForAccountInPeriod(account, periodID);
     }
 
-    function rewardsForPeriods(address account, uint[] periodIDs) external view returns (uint totalRewards) {
+    function rewardsForPeriods(address account, uint[] calldata periodIDs) external view returns (uint totalRewards) {
         for (uint i = 0; i < periodIDs.length; i++) {
             uint periodID = periodIDs[i];
 
@@ -73,7 +75,7 @@ contract TradingRewards is ITradingRewards, ReentrancyGuard {
 
         // TODO: Consider precision loss
         uint accountFees = period.recordedFeesForAccount[account];
-        uint participationRatio = accountFees.div(period.totalFees);
+        uint participationRatio = accountFees.div(period.recordedFees);
         uint maxRewards = participationRatio.mul(period.totalRewards);
 
         uint alreadyClaimed = period.claimedRewardsForAccount[account];
@@ -84,9 +86,9 @@ contract TradingRewards is ITradingRewards, ReentrancyGuard {
 
     // TODO: Implement onlyX modifier (onlyExchanger?)
     function recordExchangeFee(uint amount, address account) external {
-        Period storage period = _periods[currentPeriodID];
+        Period storage period = _periods[_currentPeriodID];
 
-        period.recordedFeesForAccount = period.recordedFeesForAccount[account].add(amount);
+        period.recordedFeesForAccount[account] = period.recordedFeesForAccount[account].add(amount);
         period.recordedFees = period.recordedFees.add(amount);
 
         emit FeeRecorded(amount, account, _currentPeriodID);
@@ -96,7 +98,7 @@ contract TradingRewards is ITradingRewards, ReentrancyGuard {
         _claimRewards(msg.sender, periodID);
     }
 
-    function claimRewardsForPeriods(uint[] periodIDs) external nonReentrant {
+    function claimRewardsForPeriods(uint[] calldata periodIDs) external nonReentrant {
         for (uint i = 0; i < periodIDs.length; i++) {
             uint periodID = periodIDs[i];
 
@@ -110,12 +112,12 @@ contract TradingRewards is ITradingRewards, ReentrancyGuard {
         uint amountToClaim = _calculateAvailableRewardsForAccountInPeriod(account, periodID);
 
         Period storage period = _periods[periodID];
-        period.claimedRewardsForAccount = period.claimedRewardsForAccount[account].add(amountToClaim);
+        period.claimedRewardsForAccount[account] = period.claimedRewardsForAccount[account].add(amountToClaim);
         period.availableRewards = period.availableRewards.sub(amountToClaim);
 
-        rewardsToken.safeTransfer(account, amountToClaim);
+        _rewardsToken.safeTransfer(account, amountToClaim);
 
-        emit RewardsClaimed(amount, account, _currentPeriodID);
+        emit RewardsClaimed(amountToClaim, account, _currentPeriodID);
     }
 
     // TODO: Use function from RewardsDistributionRecipient instead.
@@ -128,40 +130,41 @@ contract TradingRewards is ITradingRewards, ReentrancyGuard {
     /* ========== RESTRICTED FUNCTIONS ========== */
 
     function notifyRewardAmount(uint newRewards) external onlyRewardsDistribution {
-        uint currentBalance = rewardsToken.balanceOf(address(this));
+        uint currentBalance = _rewardsToken.balanceOf(address(this));
         uint targetBalance = currentBalance.add(newRewards);
         uint requiredAmount = targetBalance.sub(currentBalance);
         if (requiredAmount > 0) {
-            rewardsToken.safeTransferFrom(msg.sender, address(this), requiredAmount);
+            _rewardsToken.safeTransferFrom(msg.sender, address(this), requiredAmount);
         }
 
         _currentPeriodID = _currentPeriodID.add(1);
 
-        _periods[currentPeriodID] = Period({
+        _periods[_currentPeriodID] = Period({
             totalRewards: newRewards,
-            availableRewards: newRewards
+            availableRewards: newRewards,
+            recordedFees: 0
         });
 
-        emit NewPeriodStarted(_currentPeriodID, rewards);
+        emit NewPeriodStarted(_currentPeriodID, newRewards);
     }
 
     function recoverTokens(address tokenAddress, uint amount) external onlyOwner {
-        require(tokenAddress != _rewardsToken, "Reward tokens need to be withdrawn using another function.");
+        require(tokenAddress != address(_rewardsToken), "Reward tokens need to be withdrawn using another function.");
 
-        IERC20(tokenAddress).safeTransfer(msg.sender);
+        IERC20(tokenAddress).safeTransfer(msg.sender, amount);
 
         emit TokensRecovered(tokenAddress, amount);
     }
 
     function withdrawRewardsTokensFromCurrentPeriod(uint amount) external onlyOwner {
-        Period storage period = _periods[currentPeriodID];
+        Period storage period = _periods[_currentPeriodID];
 
         require(period.availableRewards >= amount, "Unsufficient balance for required amount.");
 
         period.availableRewards = period.availableRewards.sub(amount);
         period.totalRewards = period.totalRewards.sub(amount);
 
-        _rewardsToken.safeTransfer(msg.sender);
+        _rewardsToken.safeTransfer(msg.sender, amount);
 
         emit RewardsTokensWithdrawn(amount);
     }
