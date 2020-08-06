@@ -4,10 +4,9 @@
   "main": "index.js",
   "license": "MIT",
   "scripts": {
-    "compile": "rm -rf artifacts && buidler compile --force",
-    "typechain": "rm -rf typechain && yarn typechain-contracts && yarn typechain-abis",
-    "typechain-contracts": "typechain --outDir typechain --target ethers 'artifacts/*.json'",
-    "typechain-abis": "typechain --outDir typechain --target ethers 'abis/*.json'",
+    "compile": "npm run compile-contracts; npm run type-contracts",
+    "compile-contracts": "rm -rf artifacts && buidler compile --force",
+    "type-contracts": "rm -rf typechain && typechain --outDir typechain --target ethers 'artifacts/*.json'",
     "lint": "eslint 'src/**/*.{js,ts}'",
     "prettier": "prettier --write '**/*.{ts,js,css,html}'",
     "start": "buidler run src/start.ts",

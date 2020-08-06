@@ -4,14 +4,12 @@ import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "openzeppelin-solidity/contracts/token/ERC20/ERC20Detailed.sol";
 import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
 import "openzeppelin-solidity/contracts/utils/ReentrancyGuard.sol";
-import "openzeppelin-solidity/contracts/utils/Address.sol";
 
 import "./ITradingRewards.sol";
 
 
 // TODO: Inherit RewardsDistributionRecipient, Pausable
 contract TradingRewards is ITradingRewards, ReentrancyGuard {
-    using Address for address;
     using SafeMath for uint;
     using SafeERC20 for IERC20;
 
@@ -36,20 +34,17 @@ contract TradingRewards is ITradingRewards, ReentrancyGuard {
     /* ========== CONSTRUCTOR ========== */
 
     constructor(address owner, address rewardsToken, address rewardsDistribution) public {
-        require(_validateAddress(owner, false), "Invalid owner account.");
-        require(_validateAddress(rewardsToken, true), "Invalid rewards token.");
-        require(_validateAddress(rewardsDistribution, true), "Invalid rewards distribution contract.");
+        require(_validateAddress(owner), "Invalid owner account.");
+        require(_validateAddress(rewardsToken), "Invalid rewards token.");
+        require(_validateAddress(rewardsDistribution), "Invalid rewards distribution contract.");
 
         _owner = owner;
         _rewardsToken = IERC20(rewardsToken);
         _rewardsDistribution = rewardsDistribution;
     }
 
-    function _validateAddress(address addr, bool shouldBeContract) internal view returns (bool) {
-        bool isValidAddress = addr != address(0);
-        bool isOfExpectedKind = shouldBeContract == addr.isContract();
-
-        return isValidAddress && isOfExpectedKind;
+    function _validateAddress(address addr) internal pure returns (bool) {
+        return addr != address(0);
     }
 
     /* ========== VIEWS ========== */
@@ -122,7 +117,7 @@ contract TradingRewards is ITradingRewards, ReentrancyGuard {
 
     // TODO: Use function from RewardsDistributionRecipient instead.
     function setRewardsDistribution(address newRewardsDistribution) external onlyOwner {
-        require(_validateAddress(newRewardsDistribution, true), "Invalid rewards distribution contract.");
+        require(_validateAddress(newRewardsDistribution), "Invalid rewards distribution contract.");
 
         _rewardsDistribution = newRewardsDistribution;
     }
